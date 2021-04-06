@@ -84,9 +84,10 @@ def compare_submissions(true, preds):
     print(roc_auc_score(true["risk_flag"].values, preds["risk_flag"].values))
 
 RF_PARAMS = {
-    "n_estimators": 500,
+    "n_estimators": 1000,
     "n_jobs": -1,
-    "max_features": 1
+    "max_features": 1,
+    "class_weight": "balanced"
 }
 
 XGB_PARAMS = {
@@ -105,13 +106,21 @@ def biased_data(df):
     
     pos_idx = np.where(y == 1)[0]
     # neg_idx = 
+
 if __name__ == "__main__":
     df_train, df_test = data_preprocess(
         drop_cols=["car_ownership", "house_ownership", "married"],
         transform_fns=[income_by_state]
     )
     
-    model = RandomForestClassifier(n_estimators=1000, n_jobs=-1, class_weight="balanced", max_features=1)
-    
+    model = XGBClassifier(
+            n_estimators=5000, 
+            learning_rate=0.01,
+            tree_method="gpu_hist",
+            scale_pos_weight=7.13,
+            min_child_weight=2,
+            colsample_bytree=0.6
+        )
+
     sub = make_submission(model, df_train, df_test)
-    sub.to_csv("./tuning_rf/sub3.csv", index=False)
+    sub.to_csv("./tuning_xgb/sub1.csv", index=False)

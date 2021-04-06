@@ -10,7 +10,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import StratifiedKFold, GridSearchCV
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, ExtraTreesClassifier, StackingClassifier
 from sklearn.linear_model import LogisticRegression
 
 import xgboost as xgb
@@ -24,7 +24,7 @@ warnings.filterwarnings('ignore')
 
 TRAIN_FILE = "./train.csv"
 TEST_FILE = "./test.csv"
-N_FOLDS = 5
+N_FOLDS = 10
 CV = StratifiedKFold(n_splits=N_FOLDS, shuffle=True)
 
 def data_preprocess(drop_cols, transform_fns):
@@ -58,7 +58,7 @@ def train_model(model, df_train):
 
 def eval_model(model, df_train):
     X, y = df_train.drop("risk_flag", axis=1).values, df_train["risk_flag"].values
-    scores = cross_val_score(model, X, y, cv=CV, n_jobs=1, scoring="roc_auc", verbose=3)
+    scores = cross_val_score(model, X, y, cv=CV, n_jobs=1, scoring="roc_auc", error_score="raise")
     return scores
 
 def make_submission(model, df_train, df_test):
@@ -106,6 +106,20 @@ def biased_data(df):
     
     pos_idx = np.where(y == 1)[0]
     # neg_idx = 
+    
+def train_stacking_model():
+    base_models = [
+            ("rfv1", RandomForestClassifier(n_jobs=2)),
+            ("rfv2": RandomForestClassifier(class_weight="balanced", max_features=1, n_jobs=2)),
+            ("rfv3": RandomForestClassifier(criterion="entropy", n_jobs=2, max_depth=10)),
+            ("rfv4": RandomForestClassifier(criterion="entropy", n_jobs=2, max_features=2, max_depth=15)),
+            ("xgb": XGBClassifier(n_estimators=1000, learning_rate=0.1, tree_method="gpu_hist", scale_pos_weight=7.13, min_child_weight=2, colsample_bytree=0.9)),
+            ("extratreesv2": ExtraTreesClassifier(n_estimators=200, n_jobs=2, class_weight="balanced", max_depth=10)),
+            ("extratreesv3": ExtraTreesClassifier(n_estimators=200, n_jobs=2, class_weight="balanced", criterion="entropy", max_features=1, max_depth=10)),
+            ("adb": AdaBoostClassifier(base_estimator=DecisionTreeClassifier(max_depth=5), n_estimators=200, learning_rate=0.1))
+        ]
+    final_clf = RandomForestClassifier(n_jobs=2, class_weight="balanced")
+    model = StackingClassifier(estimators=base_models, final_estimator=final_clf, cv=CV, passthrough=True)
 
 if __name__ == "__main__":
     df_train, df_test = data_preprocess(
@@ -119,7 +133,8 @@ if __name__ == "__main__":
             tree_method="gpu_hist",
             scale_pos_weight=7.13,
             min_child_weight=2,
-            colsample_bytree=0.6
+            colsample_bytree=0.6,
+            reg_alpha=1e-3,
         )
 
     sub = make_submission(model, df_train, df_test)

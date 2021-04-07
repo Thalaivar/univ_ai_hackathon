@@ -28,30 +28,33 @@ TEST_FILE = "./test.csv"
 N_FOLDS = 10
 CV = StratifiedKFold(n_splits=N_FOLDS, shuffle=True)
 
-TRANSFORMS = [
+SINGLE_TRANSFORMS = [
     (correct_names, {"cols": ["profession", "city", "state"]}),
-    (scaled_income, {"col": "experience"}),
-    (add_house_status, {}),
-    (add_job_status, {})
+    # (scale_by_col, {"cols": ["current_job_years", "age"], "scale_cols": ["experience", "experience"]}),
+    (scale_by_group, {"cols": ["income", "income"], "groups": ["state", "profession"]})
 ]
 
-def data_preprocess(drop_cols, transform_fns=[(correct_names, {"cols": ["profession", "city", "state"]})]):
+DOUBLE_TRANSFORMS = [
+    (convert_categorical, {"cols": ["house_ownership", "car_ownership", "married", "profession", "city", "state"]}),
+    (defaults_per_col, {"cols": ["city", "state", "profession"]})
+]
+
+def data_preprocess(drop_cols, single_transforms=[], double_transforms=[]):
     df_train, df_test = (
             pd.read_csv(TRAIN_FILE).drop("Id", axis=1), 
             pd.read_csv(TEST_FILE).drop("id", axis=1)
         )
     
-    for (fn, kwargs) in transform_fns:
+    for (fn, kwargs) in single_transforms:
         df_train, df_test = fn(df_train, **kwargs), fn(df_test, **kwargs)
+    for (fn, kwargs) in double_transforms:
+        df_train, df_test = fn(df_train, df_test, **kwargs)
 
-    catg_cols = ["house_ownership", "car_ownership", "married", "profession", "city", "state"]
-    df_train, encoders = convert_categorical(df_train, catg_cols)
-    for col in catg_cols:
-        df_test[col] = encoders[col].transform(df_test[col])
 
     df_train = df_train.drop(drop_cols, axis=1)
     df_test = df_test.drop(drop_cols, axis=1)
-
+    
+    print(f"Training data shape: {df_train.shape} ; Test data shape: {df_test.shape}")
     return df_train, df_test
 
 def train_model(model, df_train):
@@ -64,12 +67,13 @@ def eval_model(model, df_train):
     scores = cross_val_score(model, X, y, cv=CV, n_jobs=1, scoring="roc_auc", error_score="raise")
     return scores
 
-def make_submission(model, df_train, df_test):
+def make_submission(model, df_train, df_test, filename):
     model = train_model(model, df_train)
     preds = model.predict(df_test.values)
 
-    res = {"id": np.arange(preds.size), "risk_flag": list(preds)}
-    return pd.DataFrame.from_dict(res) 
+    res = pd.DataFrame.from_dict({"id": np.arange(preds.size), "risk_flag": list(preds)})
+    res.to_csv(filename, index=False)
+
 
 def plot_rf_feats_imp(model, df_train):
     features = df_train.drop("risk_flag", axis=1).columns
@@ -117,16 +121,13 @@ def train_stacking_model():
 if __name__ == "__main__":
     df_train, df_test = data_preprocess(
         drop_cols=[],
-        transform_fns=[
-    (correct_names, {"cols": ["profession", "city", "state"]}),
-    (scaled_income, {"col": "city", "name": "income_by_city"}),
-    (scaled_income, {"col": "state", "name": "income_by_state"}),
-    (scaled_income, {"col": "profession", "name": "income_by_prof"}),
-    (scale_cols, {"col": "income", "scale_col": "current_job_years", "name": "income_by_jobyrs"}),
-    (scale_cols, {"col": "income", "scale_col": "age", "name": "income_by_age"}),
-    (scale_cols, {"col": "income", "scale_col": "experience", "name": "income_by_exp"}),
-    (scale_cols, {"col": "age", "scale_col": "experience", "name": "age_by_experience"}),
-    (add_house_status, {}),
-    (add_job_status, {})
-]
+        single_transforms=SINGLE_TRANSFORMS,
+        double_transforms=DOUBLE_TRANSFORMS
     )
+
+    make_submission(
+            RandomForestClassifier(n_jobs=-1, n_estimators=1000, class_weight="balanced"),
+            df_train,
+            df_test,
+            "./tuning_rf/sub5.csv"
+        )

@@ -18,6 +18,7 @@ from xgboost import XGBClassifier
 
 from scipy.stats import randint
 from sklearn.model_selection import RandomizedSearchCV
+from transforms import *
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -27,24 +28,26 @@ TEST_FILE = "./test.csv"
 N_FOLDS = 10
 CV = StratifiedKFold(n_splits=N_FOLDS, shuffle=True)
 
-def data_preprocess(drop_cols, transform_fns):
+TRANSFORMS = [
+    (correct_names, {"cols": ["profession", "city", "state"]}),
+    (scaled_income, {"col": "experience"}),
+    (add_house_status, {}),
+    (add_job_status, {})
+]
+
+def data_preprocess(drop_cols, transform_fns=[(correct_names, {"cols": ["profession", "city", "state"]})]):
     df_train, df_test = (
             pd.read_csv(TRAIN_FILE).drop("Id", axis=1), 
             pd.read_csv(TEST_FILE).drop("id", axis=1)
         )
-
-    for col in ["profession", "city", "state"]:
-        df_train[col] = df_train[col].str.replace("_", " ")
-        df_test[col] = df_test[col].str.replace("_", " ")
-
-    encode_cols = ["house_ownership", "car_ownership", "married", "profession", "city", "state"]
-    for col in encode_cols:
-        encoder = LabelEncoder().fit(df_train[col].values)
-        df_train[col] = encoder.transform(df_train[col].values)
-        df_test[col] = encoder.transform(df_test[col].values)
     
-    for fn in transform_fns:
-        df_train, df_test = fn(df_train), fn(df_test)
+    for (fn, kwargs) in transform_fns:
+        df_train, df_test = fn(df_train, **kwargs), fn(df_test, **kwargs)
+
+    catg_cols = ["house_ownership", "car_ownership", "married", "profession", "city", "state"]
+    df_train, encoders = convert_categorical(df_train, catg_cols)
+    for col in catg_cols:
+        df_test[col] = encoders[col].transform(df_test[col])
 
     df_train = df_train.drop(drop_cols, axis=1)
     df_test = df_test.drop(drop_cols, axis=1)
@@ -94,48 +97,36 @@ XGB_PARAMS = {
     "n_estimators": 2000,
     "tree_method": "gpu_hist"
 }
-
-def income_by_state(df):
-    median_state_income = df.groupby("state")["income"].transform("median")
-    df["income"] = df["income"] / median_state_income
-    return df
-
-def biased_data(df):
-    y = df["risk_flag"].values
-    psr = (y.size - y.sum()) / y.sum()
     
-    pos_idx = np.where(y == 1)[0]
-    # neg_idx = 
     
 def train_stacking_model():
     base_models = [
             ("rfv1", RandomForestClassifier(n_jobs=2)),
-            ("rfv2": RandomForestClassifier(class_weight="balanced", max_features=1, n_jobs=2)),
-            ("rfv3": RandomForestClassifier(criterion="entropy", n_jobs=2, max_depth=10)),
-            ("rfv4": RandomForestClassifier(criterion="entropy", n_jobs=2, max_features=2, max_depth=15)),
-            ("xgb": XGBClassifier(n_estimators=1000, learning_rate=0.1, tree_method="gpu_hist", scale_pos_weight=7.13, min_child_weight=2, colsample_bytree=0.9)),
-            ("extratreesv2": ExtraTreesClassifier(n_estimators=200, n_jobs=2, class_weight="balanced", max_depth=10)),
-            ("extratreesv3": ExtraTreesClassifier(n_estimators=200, n_jobs=2, class_weight="balanced", criterion="entropy", max_features=1, max_depth=10)),
-            ("adb": AdaBoostClassifier(base_estimator=DecisionTreeClassifier(max_depth=5), n_estimators=200, learning_rate=0.1))
+            ("rfv2", RandomForestClassifier(class_weight="balanced", max_features=1, n_jobs=2)),
+            ("rfv3", RandomForestClassifier(criterion="entropy", n_jobs=2, max_depth=10)),
+            ("rfv4", RandomForestClassifier(criterion="entropy", n_jobs=2, max_features=2, max_depth=15)),
+            ("xgb", XGBClassifier(n_estimators=1000, learning_rate=0.1, tree_method="gpu_hist", scale_pos_weight=7.13, min_child_weight=2, colsample_bytree=0.9)),
+            ("extratreesv2", ExtraTreesClassifier(n_estimators=200, n_jobs=2, class_weight="balanced", max_depth=10)),
+            ("extratreesv3", ExtraTreesClassifier(n_estimators=200, n_jobs=2, class_weight="balanced", criterion="entropy", max_features=1, max_depth=10)),
+            ("adb", AdaBoostClassifier(base_estimator=DecisionTreeClassifier(max_depth=5), n_estimators=200, learning_rate=0.1))
         ]
     final_clf = RandomForestClassifier(n_jobs=2, class_weight="balanced")
     model = StackingClassifier(estimators=base_models, final_estimator=final_clf, cv=CV, passthrough=True)
+    
 
 if __name__ == "__main__":
     df_train, df_test = data_preprocess(
-        drop_cols=["car_ownership", "house_ownership", "married"],
-        transform_fns=[income_by_state]
+        drop_cols=[],
+        transform_fns=[
+    (correct_names, {"cols": ["profession", "city", "state"]}),
+    (scaled_income, {"col": "city", "name": "income_by_city"}),
+    (scaled_income, {"col": "state", "name": "income_by_state"}),
+    (scaled_income, {"col": "profession", "name": "income_by_prof"}),
+    (scale_cols, {"col": "income", "scale_col": "current_job_years", "name": "income_by_jobyrs"}),
+    (scale_cols, {"col": "income", "scale_col": "age", "name": "income_by_age"}),
+    (scale_cols, {"col": "income", "scale_col": "experience", "name": "income_by_exp"}),
+    (scale_cols, {"col": "age", "scale_col": "experience", "name": "age_by_experience"}),
+    (add_house_status, {}),
+    (add_job_status, {})
+]
     )
-    
-    model = XGBClassifier(
-            n_estimators=5000, 
-            learning_rate=0.01,
-            tree_method="gpu_hist",
-            scale_pos_weight=7.13,
-            min_child_weight=2,
-            colsample_bytree=0.6,
-            reg_alpha=1e-3,
-        )
-
-    sub = make_submission(model, df_train, df_test)
-    sub.to_csv("./tuning_xgb/sub1.csv", index=False)

@@ -13,6 +13,7 @@ from xgboost import XGBClassifier
 rf = RandomForestClassifier(n_jobs=-1)
 dtree = DecisionTreeClassifier()
 etree = ExtraTreesClassifier(n_jobs=-1)
+xgb = XGBClassifier(gamma=0.5, tree_method="gpu_hist")
 
 """
 *********************************************************************
@@ -24,11 +25,15 @@ model_list = [
     ("rfv1", rf, {"n_estimators": 500, "class_weight": "balanced", "max_features": 1}, {}),
     ("rfv2", rf, {"n_estimators": 500, "max_features": 0.5}, {}),
     ("rfv3", rf, {"class_weight": "balanced", "criterion": "entropy", "max_features": 0.8}, {}),
-]
+    ("xgbv1", xgb, {"scale_pos_weight": 12, "n_estimators": 2000, "learning_rate": 0.01}, {}),
+    # ("xgbv2", xgb, {"colsample_bytree": 0.6, "subsample": 0.6}, {}),
+
+]  
 transform_list = {
     "rfv1": (["house_ownership", "car_ownership", "married"], []),
     "rfv2": ([], SINGLE_TRANSFORMS),
-    "rfv3": (["income", "age", "current_job_years", "current_house_years"], [])
+    "rfv3": (["income", "age", "current_job_years", "current_house_years"], []),
+    "xgbv1": ([], SINGLE_TRANSFORMS)
 }
 
 import os
@@ -47,7 +52,7 @@ def base_level_predictions(model, drop_cols=[], transforms=[], fit_params={}):
     for (train_idx, test_idx) in CV.split(X, y):
         model.fit(X[train_idx], y[train_idx], **fit_params)
         
-        meta_train["preds"].extend(model.predict(X[test_idx]))
+        meta_train["preds"].extend(model.predict_proba(X[test_idx]))
         meta_train["id"].extend(ids[test_idx])
         meta_train["targets"].extend(y[test_idx])
     

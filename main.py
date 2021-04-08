@@ -25,51 +25,51 @@ warnings.filterwarnings('ignore')
 
 TRAIN_FILE = "./train.csv"
 TEST_FILE = "./test.csv"
-N_FOLDS = 10
+N_FOLDS = 5
 CV = StratifiedKFold(n_splits=N_FOLDS, shuffle=True)
 
 SINGLE_TRANSFORMS = [
-    (correct_names, {"cols": ["profession", "city", "state"]}),
-    # (scale_by_col, {"cols": ["current_job_years", "age"], "scale_cols": ["experience", "experience"]}),
-    (scale_by_group, {"cols": ["income", "income"], "groups": ["state", "profession"]})
+    (scale_by_col, {"cols": ["current_job_years"], "scale_cols": ["current_house_years"]}),
+    (scale_by_group, {"cols": ["income", "income"], "groups": ["city", "profession"]}),
+    (add_house_status, {}),
+    (custom_transform1, {})
 ]
 
-DOUBLE_TRANSFORMS = [
-    (convert_categorical, {"cols": ["house_ownership", "car_ownership", "married", "profession", "city", "state"]}),
-    (defaults_per_col, {"cols": ["city", "state", "profession"]})
-]
-
-def data_preprocess(drop_cols, single_transforms=[], double_transforms=[]):
+def data_preprocess(drop_cols=[], transforms=[]):
     df_train, df_test = (
-            pd.read_csv(TRAIN_FILE).drop("Id", axis=1), 
-            pd.read_csv(TEST_FILE).drop("id", axis=1)
+            pd.read_csv(TRAIN_FILE), 
+            pd.read_csv(TEST_FILE)
         )
     
-    for (fn, kwargs) in single_transforms:
-        df_train, df_test = fn(df_train, **kwargs), fn(df_test, **kwargs)
-    for (fn, kwargs) in double_transforms:
-        df_train, df_test = fn(df_train, df_test, **kwargs)
+    df_train = correct_names(df_train, cols=["profession", "city", "state"])
+    df_test = correct_names(df_test, cols=["profession", "city", "state"])
 
+    catg_cols = ["house_ownership", "car_ownership", "married", "profession", "city", "state"]
+    df_train, df_test = convert_categorical(df_train, df_test, catg_cols)
+
+    for (fn, kwargs) in transforms:
+        df_train, df_test = fn(df_train, **kwargs), fn(df_test, **kwargs)
 
     df_train = df_train.drop(drop_cols, axis=1)
     df_test = df_test.drop(drop_cols, axis=1)
-    
-    print(f"Training data shape: {df_train.shape} ; Test data shape: {df_test.shape}")
+
+
+    # print(f"Training data shape: {df_train.shape} ; Test data shape: {df_test.shape}")
     return df_train, df_test
 
-def train_model(model, df_train):
-    X, y = df_train.drop("risk_flag", axis=1).values, df_train["risk_flag"].values
-    model.fit(X, y)
+def train_model(model, df_train, fit_params={}):
+    X, y = df_train.drop(["risk_flag", "Id"], axis=1).values, df_train["risk_flag"].values
+    model.fit(X, y, sample_weight=sample_wts)
     return model
 
 def eval_model(model, df_train):
-    X, y = df_train.drop("risk_flag", axis=1).values, df_train["risk_flag"].values
-    scores = cross_val_score(model, X, y, cv=CV, n_jobs=1, scoring="roc_auc", error_score="raise")
+    X, y = df_train.drop(["risk_flag", "Id"], axis=1).values, df_train["risk_flag"].values
+    scores = cross_val_score(model, X, y, cv=CV, n_jobs=1, scoring="roc_auc", error_score="raise", fit_params={"sample_weight": sample_wts})
     return scores
 
 def make_submission(model, df_train, df_test, filename):
     model = train_model(model, df_train)
-    preds = model.predict(df_test.values)
+    preds = model.predict(df_test.drop("id", axis=1).values)
 
     res = pd.DataFrame.from_dict({"id": np.arange(preds.size), "risk_flag": list(preds)})
     res.to_csv(filename, index=False)
@@ -120,14 +120,30 @@ def train_stacking_model():
 
 if __name__ == "__main__":
     df_train, df_test = data_preprocess(
-        drop_cols=[],
+        drop_cols=["house_ownership", "car_ownership", "married"],
         single_transforms=SINGLE_TRANSFORMS,
         double_transforms=DOUBLE_TRANSFORMS
     )
 
+    model = RandomForestClassifier(n_jobs=-1, class_weight="balanced", max_features=1, n_estimators=1000)
+    # model = XGBClassifier(
+    #         n_estimators=5000, 
+    #         learning_rate=0.01, 
+    #         tree_method="gpu_hist", 
+    #         scale_pos_weight=12, 
+    #         min_child_weight=2, 
+    #         colsample_bytree=0.6, 
+    #         subsample=0.9,
+    #         gamma=0.5
+    #     )
+
+    print(eval_model(model, df_train))
+
     make_submission(
-            RandomForestClassifier(n_jobs=-1, n_estimators=1000, class_weight="balanced"),
+            model,
             df_train,
             df_test,
             "./tuning_rf/sub5.csv"
         )
+
+    # print(compare_submissions("./goodsubmits/submission.csv", "./tuning_rf/sub5.csv"))

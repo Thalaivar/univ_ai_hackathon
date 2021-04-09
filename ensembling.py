@@ -127,8 +127,8 @@ if __name__ == "__main__":
     # make_submission(model)
 
     from sklearn.svm import LinearSVC
-    make_ensemble_submission(LinearSVC(class_weight="balanced"))
+    make_ensemble_submission(RandomForestClassifier(n_jobs=-1, class_weight="balanced", max_depth=5, max_features=1))
     # max_voting_submission(df_test)
 
     from main import compare_submissions
-    print(compare_submissions("./goodsubmits/sub3.csv", "./ensemble_files/stacking_sub.csv"))
+    print(compare_submissions("./goodsubmits/stacking_sub1.csv", "./ensemble_files/stacking_sub.csv"))

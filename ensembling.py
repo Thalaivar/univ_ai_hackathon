@@ -9,11 +9,9 @@ from sklearn.ensemble import (
 )
 from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
 
-rf = RandomForestClassifier(n_jobs=-1)
-dtree = DecisionTreeClassifier()
-etree = ExtraTreesClassifier(n_jobs=-1)
-xgb = XGBClassifier(gamma=0.5, tree_method="gpu_hist")
+from main import *
 
 """
 *********************************************************************
@@ -22,18 +20,22 @@ xgb = XGBClassifier(gamma=0.5, tree_method="gpu_hist")
 *********************************************************************
 """
 model_list = [
-    ("rfv1", rf, {"n_estimators": 500, "class_weight": "balanced", "max_features": 1}, {}),
-    ("rfv2", rf, {"n_estimators": 500, "max_features": 0.5}, {}),
-    ("rfv3", rf, {"class_weight": "balanced", "criterion": "entropy", "max_features": 0.8}, {}),
-    ("xgbv1", xgb, {"scale_pos_weight": 12, "n_estimators": 2000, "learning_rate": 0.01}, {}),
-    # ("xgbv2", xgb, {"colsample_bytree": 0.6, "subsample": 0.6}, {}),
+    ("rf", RandomForestClassifier(), RF_PARAMS, {}),
+    ("lgbm", LGBMClassifier(), LGBM_PARAMS, {}),
+    ("xgb", XGBClassifier(), XGB_PARAMS, {}),
+] 
 
-]  
+# transforms1 = {
+#     "transforms": [
+#         (scale_by_group, {"cols": ["income", "age"], "scale_cols": ["city", "profession"]})
+#         (subtract_cols, {"cols": ["age", "current_job_years"]})
+#     ]
+# }
+
 transform_list = {
-    "rfv1": (["house_ownership", "car_ownership", "married"], []),
-    "rfv2": ([], SINGLE_TRANSFORMS),
-    "rfv3": (["income", "age", "current_job_years", "current_house_years"], []),
-    "xgbv1": ([], SINGLE_TRANSFORMS)
+    "rf": (["house_ownership", "car_ownership", "married"], []),
+    "lgbm": ([], SINGLE_TRANSFORMS),
+    "xgb": (["house_ownership", "car_ownership", "married"], SINGLE_TRANSFORMS),
 }
 
 import os
@@ -41,7 +43,7 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
-CV = StratifiedKFold(n_splits=10, shuffle=True)
+CV = StratifiedKFold(n_splits=5, shuffle=True)
 
 def base_level_predictions(model, drop_cols=[], transforms=[], fit_params={}):
     df_train, df_test = data_preprocess(drop_cols, transforms)
@@ -52,7 +54,7 @@ def base_level_predictions(model, drop_cols=[], transforms=[], fit_params={}):
     for (train_idx, test_idx) in CV.split(X, y):
         model.fit(X[train_idx], y[train_idx], **fit_params)
         
-        meta_train["preds"].extend(model.predict_proba(X[test_idx]))
+        meta_train["preds"].extend(model.predict_proba(X[test_idx])[:,0])
         meta_train["id"].extend(ids[test_idx])
         meta_train["targets"].extend(y[test_idx])
     
@@ -101,7 +103,7 @@ def generate_meta_datasets(model_list, transform_list):
 
     return df_train, df_test
 
-def make_submission(model):
+def make_ensemble_submission(model):
     df_train, df_test = pd.read_csv("./ensemble_files/final_train.csv"), pd.read_csv("./ensemble_files/final_test.csv")
     
     X, y = df_train.drop(["targets", "id"], axis=1).values, df_train["targets"]
@@ -112,9 +114,21 @@ def make_submission(model):
     sub = pd.DataFrame.from_dict({"id": df_test["id"], "risk_flag": preds})
     sub.to_csv("./ensemble_files/stacking_sub.csv", index=False)
 
+def max_voting_submission(df_test):
+    preds = df_test.drop("id", axis=1).mean(axis=1)
+    preds = preds.apply(lambda x: int(not x > 0.5))
+    sub = pd.DataFrame.from_dict({"id": df_test["id"], "risk_flag": preds})
+    sub.to_csv("./ensemble_files/maxvoting_sub.csv", index=False)
+
 if __name__ == "__main__":
     df_train, df_test = generate_meta_datasets(model_list, transform_list)
-    make_submission(RandomForestClassifier(n_estimators=1000, n_jobs=-1, class_weight="balanced"))
+    # model = XGBClassifier(gamma=0.5, tree_method="gpu_hist", n_estimators=5000, learning_rate=0.01, subsample=0.6)
+    # # RandomForestClassifier(n_estimators=1000, n_jobs=-1, class_weight="balanced")
+    # make_submission(model)
+
+    from sklearn.svm import LinearSVC
+    make_ensemble_submission(LinearSVC(class_weight="balanced"))
+    # max_voting_submission(df_test)
 
     from main import compare_submissions
     print(compare_submissions("./goodsubmits/sub3.csv", "./ensemble_files/stacking_sub.csv"))

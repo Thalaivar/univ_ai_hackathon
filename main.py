@@ -14,7 +14,9 @@ from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, ExtraTr
 from sklearn.linear_model import LogisticRegression
 
 import xgboost as xgb
+import lightgbm as lgb
 from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
 
 from scipy.stats import randint
 from sklearn.model_selection import RandomizedSearchCV
@@ -59,12 +61,12 @@ def data_preprocess(drop_cols=[], transforms=[]):
 
 def train_model(model, df_train, fit_params={}):
     X, y = df_train.drop(["risk_flag", "Id"], axis=1).values, df_train["risk_flag"].values
-    model.fit(X, y, sample_weight=sample_wts)
+    model.fit(X, y)
     return model
 
 def eval_model(model, df_train):
     X, y = df_train.drop(["risk_flag", "Id"], axis=1).values, df_train["risk_flag"].values
-    scores = cross_val_score(model, X, y, cv=CV, n_jobs=1, scoring="roc_auc", error_score="raise", fit_params={"sample_weight": sample_wts})
+    scores = cross_val_score(model, X, y, cv=CV, n_jobs=1, scoring="roc_auc", error_score="raise")
     return scores
 
 def make_submission(model, df_train, df_test, filename):
@@ -98,52 +100,49 @@ RF_PARAMS = {
 }
 
 XGB_PARAMS = {
-    "n_estimators": 2000,
-    "tree_method": "gpu_hist"
+    "n_estimators": 1000,
+    "learning_rate": 0.01,
+    "tree_method": "gpu_hist",
+    "colsample_bytree": 0.9,
+    "gamma": 0.1,
+    "max_depth": 25,
+    "scale_pos_weight": 9.267,
+    "min_child_weight": 14.7,
+    "subsample": 0.9
 }
-    
-    
-def train_stacking_model():
-    base_models = [
-            ("rfv1", RandomForestClassifier(n_jobs=2)),
-            ("rfv2", RandomForestClassifier(class_weight="balanced", max_features=1, n_jobs=2)),
-            ("rfv3", RandomForestClassifier(criterion="entropy", n_jobs=2, max_depth=10)),
-            ("rfv4", RandomForestClassifier(criterion="entropy", n_jobs=2, max_features=2, max_depth=15)),
-            ("xgb", XGBClassifier(n_estimators=1000, learning_rate=0.1, tree_method="gpu_hist", scale_pos_weight=7.13, min_child_weight=2, colsample_bytree=0.9)),
-            ("extratreesv2", ExtraTreesClassifier(n_estimators=200, n_jobs=2, class_weight="balanced", max_depth=10)),
-            ("extratreesv3", ExtraTreesClassifier(n_estimators=200, n_jobs=2, class_weight="balanced", criterion="entropy", max_features=1, max_depth=10)),
-            ("adb", AdaBoostClassifier(base_estimator=DecisionTreeClassifier(max_depth=5), n_estimators=200, learning_rate=0.1))
-        ]
-    final_clf = RandomForestClassifier(n_jobs=2, class_weight="balanced")
-    model = StackingClassifier(estimators=base_models, final_estimator=final_clf, cv=CV, passthrough=True)
-    
+
+LGBM_PARAMS = {
+    "device": "gpu",
+    "boosting_type": "goss",
+    "verbose": -1,
+    "colsample_bytree": 0.7112,
+    "max_bin": 191,
+    "max_depth": 25,
+    "num_leaves": 299,
+    "scale_pos_weight": 12.231,
+    "subsample": 0.239,
+    "n_estimators": 1000,
+    "learning_rate": 0.01
+}
 
 if __name__ == "__main__":
     df_train, df_test = data_preprocess(
         drop_cols=["house_ownership", "car_ownership", "married"],
-        single_transforms=SINGLE_TRANSFORMS,
-        double_transforms=DOUBLE_TRANSFORMS
+        transforms=SINGLE_TRANSFORMS
     )
 
-    model = RandomForestClassifier(n_jobs=-1, class_weight="balanced", max_features=1, n_estimators=1000)
-    # model = XGBClassifier(
-    #         n_estimators=5000, 
-    #         learning_rate=0.01, 
-    #         tree_method="gpu_hist", 
-    #         scale_pos_weight=12, 
-    #         min_child_weight=2, 
-    #         colsample_bytree=0.6, 
-    #         subsample=0.9,
-    #         gamma=0.5
+    
+    opt_params = bayes_parameter_opt_lgb(df_train.drop("Id", axis=1).values, df_train["risk_flag"].values, init_round=25, opt_round=50, n_folds=3, random_seed=6,n_estimators=200)
+    
+    # model = LGBMClassifier(is_unbalance=True, n_estimators=200, learning_rate=0.1, device="gpu", num_leaves=200, boosting_type="goss", subsample=0.6)
+    # print(eval_model(model, df_train))
+
+
+    # make_submission(
+    #         model,
+    #         df_train,
+    #         df_test,
+    #         "./tuning_rf/sub5.csv"
     #     )
-
-    print(eval_model(model, df_train))
-
-    make_submission(
-            model,
-            df_train,
-            df_test,
-            "./tuning_rf/sub5.csv"
-        )
 
     # print(compare_submissions("./goodsubmits/submission.csv", "./tuning_rf/sub5.csv"))

@@ -8,6 +8,19 @@ def scale_by_group(df, cols, groups):
         df[f"{col}_per_{group}"] = df.groupby(group)[col].transform("median")
     return df
 
+def make_biased_dataset(df):
+    if "risk_flag" in df.columns:
+        y = df["risk_flag"].values
+        psr = y.sum() / (y.size - y.sum())
+        
+        pos_idx = np.where(y == 1)[0]
+        neg_idx = np.random.permutation(np.arange(y.size))[:int(psr * pos_idx.size)]
+        idx = np.random.permutation(np.hstack((pos_idx, neg_idx)))
+        df = df.loc[idx, :]
+        return df
+    else:
+        return df    
+
 def subtract_cols(train_df, test_df, cols):
     col1, col2 = cols
     train_df[f"{col1}-{col2}"] = train_df[col1] - train_df[col2]

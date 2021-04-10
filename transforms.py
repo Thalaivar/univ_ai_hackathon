@@ -8,6 +8,11 @@ def scale_by_group(df, cols, groups):
         df[f"{col}_per_{group}"] = df.groupby(group)[col].transform("median")
     return df
 
+def subtract_from_group(df, cols, groups):
+    for (col, group) in zip(cols, groups):
+        df[col] = df[col] - df.groupby(group)[col].transform("median")
+    return df
+    
 def make_biased_dataset(df):
     if "risk_flag" in df.columns:
         y = df["risk_flag"].values

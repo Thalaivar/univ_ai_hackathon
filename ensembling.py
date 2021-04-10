@@ -26,7 +26,7 @@ model_list = [
     ("lgbm", LGBMClassifier(), LGBM_PARAMS, False),
     ("xgb", XGBClassifier(), XGB_PARAMS, False),
     ("lgbm-v2", LGBMClassifier(), LGBM_PARAMS, False),
-    ('etree', ExtraTreesClassifier(), {"n_estimators": 500, "criterion":"entropy"}, False)
+    ("rf-v2", XGBClassifier(), XGB_PARAMS, False)
 ] 
 
 transform_list = {
@@ -34,7 +34,7 @@ transform_list = {
     "lgbm": ([], SINGLE_TRANSFORMS),
     "xgb": (["house_ownership", "car_ownership", "married"], SINGLE_TRANSFORMS),
     "lgbm-v2": ([], TRANSFORMS_2),
-    "etree": (["city", "state", "profession"], TRANSFORMS_2)
+    "rf-v2": ([], TRANSFORMS_3)
 }
 
 import os
@@ -82,7 +82,6 @@ def biased_base_level_predictions(model, drop_cols=[], transforms=[]):
     meta_test = model.predict_proba(df_test.drop("id", axis=1).values)[:,0]
     meta_test = pd.DataFrame.from_dict({"id": np.arange(meta_test.size), "preds": meta_test})
     return (meta_train, meta_test)
-
     
 def generate_meta_datasets(model_list, transform_list):
     X_meta, X_test = [], []
@@ -151,6 +150,8 @@ if __name__ == "__main__":
     from sklearn.svm import LinearSVC
     
     make_ensemble_submission(RandomForestClassifier(n_jobs=-1, class_weight="balanced", max_depth=5, max_features=1))
+    # model = LGBMClassifier(colsample_bytree=0.8565, max_depth=25, max_bin=180, num_leaves=188, scale_pos_weight=12.21, subsample=0.44, boosting_type="goss", device="gpu", n_estimators=2000)
+    # make_ensemble_submission(model)
     # max_voting_submission(df_test)
 
     from main import compare_submissions

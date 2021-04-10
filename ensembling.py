@@ -11,6 +11,8 @@ from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 
+ORIGNAL_SIZE = 252000
+
 from main import *
 
 """
@@ -20,22 +22,19 @@ from main import *
 *********************************************************************
 """
 model_list = [
-    ("rf", RandomForestClassifier(), RF_PARAMS, {}),
-    ("lgbm", LGBMClassifier(), LGBM_PARAMS, {}),
-    ("xgb", XGBClassifier(), XGB_PARAMS, {}),
+    ("rf", RandomForestClassifier(), RF_PARAMS, False),
+    ("lgbm", LGBMClassifier(), LGBM_PARAMS, False),
+    ("xgb", XGBClassifier(), XGB_PARAMS, False),
+    ("lgbm-v2", LGBMClassifier(), LGBM_PARAMS, False),
+    ('etree', ExtraTreesClassifier(), {"n_estimators": 500, "criterion":"entropy"}, False)
 ] 
-
-# transforms1 = {
-#     "transforms": [
-#         (scale_by_group, {"cols": ["income", "age"], "scale_cols": ["city", "profession"]})
-#         (subtract_cols, {"cols": ["age", "current_job_years"]})
-#     ]
-# }
 
 transform_list = {
     "rf": (["house_ownership", "car_ownership", "married"], []),
     "lgbm": ([], SINGLE_TRANSFORMS),
     "xgb": (["house_ownership", "car_ownership", "married"], SINGLE_TRANSFORMS),
+    "lgbm-v2": ([], TRANSFORMS_2),
+    "etree": (["city", "state", "profession"], TRANSFORMS_2)
 }
 
 import os
@@ -45,14 +44,15 @@ from tqdm import tqdm
 
 CV = StratifiedKFold(n_splits=5, shuffle=True)
 
-def base_level_predictions(model, drop_cols=[], transforms=[], fit_params={}):
+def base_level_predictions(model, drop_cols=[], transforms=[]):
     df_train, df_test = data_preprocess(drop_cols, transforms)
+
     ids, y = df_train["Id"].values, df_train["risk_flag"].values
     X = df_train.drop(["risk_flag", "Id"], axis=1).values
 
     meta_train = {"id": [], "preds": [], "targets": []}
     for (train_idx, test_idx) in CV.split(X, y):
-        model.fit(X[train_idx], y[train_idx], **fit_params)
+        model.fit(X[train_idx], y[train_idx])
         
         meta_train["preds"].extend(model.predict_proba(X[test_idx])[:,0])
         meta_train["id"].extend(ids[test_idx])
@@ -65,10 +65,29 @@ def base_level_predictions(model, drop_cols=[], transforms=[], fit_params={}):
     meta_test = pd.DataFrame.from_dict({"id": np.arange(meta_test.size), "preds": meta_test})
     return (meta_train, meta_test)
 
+def biased_base_level_predictions(model, drop_cols=[], transforms=[]):
+    df_train, df_test = data_preprocess(drop_cols, transforms)
+    df_bias = make_biased_dataset(df_train.copy())
+
+    X = df_bias.drop(["risk_flag", "Id"], axis=1).values
+    y = df_bias["risk_flag"].values
+    model.fit(X, y)
+
+    meta_train = {}
+    meta_train["id"] = df_train["Id"].values
+    meta_train["preds"] = model.predict_proba(df_train.drop(["Id", "risk_flag"], axis=1).values)[:,0]
+    meta_train["targets"] = df_train["risk_flag"].values
+
+    meta_train = pd.DataFrame.from_dict(meta_train)
+    meta_test = model.predict_proba(df_test.drop("id", axis=1).values)[:,0]
+    meta_test = pd.DataFrame.from_dict({"id": np.arange(meta_test.size), "preds": meta_test})
+    return (meta_train, meta_test)
+
+    
 def generate_meta_datasets(model_list, transform_list):
     X_meta, X_test = [], []
     for i in tqdm(range(len(model_list))):
-        name, model, model_params, fit_params = model_list[i]
+        name, model, model_params, use_bias = model_list[i]
         model = clone(model)
         model.set_params(**model_params)
 
@@ -79,7 +98,10 @@ def generate_meta_datasets(model_list, transform_list):
             X_test.append(pd.read_csv(meta_test_fname))
         else:
             drop_cols, transforms = transform_list[name]
-            meta_train, meta_test = base_level_predictions(model, drop_cols, transforms, fit_params)
+            if use_bias:
+                meta_train, meta_test = biased_base_level_predictions(model, drop_cols, transforms)
+            else:
+                meta_train, meta_test = base_level_predictions(model, drop_cols, transforms)
 
             meta_train.rename(columns={"preds": f"{name}_preds"}, inplace=True)
             meta_test.rename(columns={"preds": f"{name}_preds"}, inplace=True)
@@ -127,8 +149,9 @@ if __name__ == "__main__":
     # make_submission(model)
 
     from sklearn.svm import LinearSVC
+    
     make_ensemble_submission(RandomForestClassifier(n_jobs=-1, class_weight="balanced", max_depth=5, max_features=1))
     # max_voting_submission(df_test)
 
     from main import compare_submissions
-    print(compare_submissions("./goodsubmits/stacking_sub1.csv", "./ensemble_files/stacking_sub.csv"))
+    print(compare_submissions("./goodsubmits/stacking_sub2.csv", "./ensemble_files/stacking_sub.csv"))

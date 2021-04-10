@@ -37,6 +37,9 @@ SINGLE_TRANSFORMS = [
     (custom_transform1, {})
 ]
 
+TRANSFORMS_2 = [
+    (scale_by_group, {"cols": ["age", "current_job_years", "current_house_years"], "groups": ["profession", "profession", "house_ownership"]}),
+]
 def data_preprocess(drop_cols=[], transforms=[]):
     df_train, df_test = (
             pd.read_csv(TRAIN_FILE), 

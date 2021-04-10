@@ -7,7 +7,7 @@ from sklearn.ensemble import (
         GradientBoostingClassifier, 
         ExtraTreesClassifier
 )
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.neural_network import MLPClassifier
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 
@@ -21,20 +21,26 @@ from main import *
 *   DELETE THE SAVE FILES IN "./ensembles_files"                    *
 *********************************************************************
 """
+from sklearn.neighbors import KNeighborsClassifier
 model_list = [
     ("rf", RandomForestClassifier(), RF_PARAMS, False),
     ("lgbm", LGBMClassifier(), LGBM_PARAMS, False),
     ("xgb", XGBClassifier(), XGB_PARAMS, False),
     ("lgbm-v2", LGBMClassifier(), LGBM_PARAMS, False),
-    ("rf-v2", XGBClassifier(), XGB_PARAMS, False)
+    ("xgb-v2", XGBClassifier(), XGB_PARAMS, False),
+    ("knn", KNeighborsClassifier(n_neighbors=500, weights="distance", n_jobs=-1), {}, False)
 ] 
 
+tfs = SINGLE_TRANSFORMS
+tfs.extend(TRANSFORMS_2)
+tfs.extend(TRANSFORMS_3)
 transform_list = {
     "rf": (["house_ownership", "car_ownership", "married"], []),
     "lgbm": ([], SINGLE_TRANSFORMS),
     "xgb": (["house_ownership", "car_ownership", "married"], SINGLE_TRANSFORMS),
     "lgbm-v2": ([], TRANSFORMS_2),
-    "rf-v2": ([], TRANSFORMS_3)
+    "xgb-v2": ([], TRANSFORMS_3),
+    "knn": ([], [])
 }
 
 import os

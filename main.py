@@ -47,7 +47,7 @@ TRANSFORMS_3 = [
     (subtract_from_group, {"cols": ["current_job_years", "current_house_years"], "groups": ["profession", "city"]})
 ]
 
-def data_preprocess(drop_cols=[], transforms=[]):
+def data_preprocess(drop_cols=[], transforms=[], no_encode=False):
     df_train, df_test = (
             pd.read_csv(TRAIN_FILE), 
             pd.read_csv(TEST_FILE)
@@ -56,8 +56,9 @@ def data_preprocess(drop_cols=[], transforms=[]):
     df_train = correct_names(df_train, cols=["profession", "city", "state"])
     df_test = correct_names(df_test, cols=["profession", "city", "state"])
 
-    catg_cols = ["house_ownership", "car_ownership", "married", "profession", "city", "state"]
-    df_train, df_test = convert_categorical(df_train, df_test, catg_cols)
+    if not no_encode:
+        catg_cols = ["house_ownership", "car_ownership", "married", "profession", "city", "state"]
+        df_train, df_test = convert_categorical(df_train, df_test, catg_cols)
 
     for (fn, kwargs) in transforms:
         df_train, df_test = fn(df_train, **kwargs), fn(df_test, **kwargs)
@@ -135,6 +136,19 @@ LGBM_PARAMS = {
     "learning_rate": 0.01
 }
 
+CBOOST_PARAMS = {
+    "task_type": "CPU",
+    "boosting_type": "Ordered",
+    "max_bin": 254,
+    "loss_function": "Logloss",
+    "approx_on_full_history": True,
+    "n_estimators": 1000,
+    "custom_metric": "AUC",
+    "eval_metric": "AUC",
+    "auto_class_weights": "Balanced",
+    "verbose": True,
+}
+
 if __name__ == "__main__":
     df_train, df_test = data_preprocess(
         drop_cols=["house_ownership", "car_ownership", "married"],
@@ -142,7 +156,7 @@ if __name__ == "__main__":
     )
 
     
-    opt_params = bayes_parameter_opt_lgb(df_train.drop("Id", axis=1).values, df_train["risk_flag"].values, init_round=25, opt_round=50, n_folds=3, random_seed=6,n_estimators=200)
+    # opt_params = bayes_parameter_opt_lgb(df_train.drop("Id", axis=1).values, df_train["risk_flag"].values, init_round=25, opt_round=50, n_folds=3, random_seed=6,n_estimators=200)
     
     # model = LGBMClassifier(is_unbalance=True, n_estimators=200, learning_rate=0.1, device="gpu", num_leaves=200, boosting_type="goss", subsample=0.6)
     # print(eval_model(model, df_train))

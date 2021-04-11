@@ -22,26 +22,22 @@ from main import *
 *********************************************************************
 """
 from sklearn.neighbors import KNeighborsClassifier
+from catboost import CatBoostClassifier
 model_list = [
-    ("rf", RandomForestClassifier(), RF_PARAMS, False),
-    ("lgbm", LGBMClassifier(), LGBM_PARAMS, False),
-    ("xgb", XGBClassifier(), XGB_PARAMS, False),
-    ("lgbm-v2", LGBMClassifier(), LGBM_PARAMS, False),
-    ("xgb-v2", XGBClassifier(), XGB_PARAMS, False),
-    ("knn", KNeighborsClassifier(n_neighbors=500, weights="distance", n_jobs=-1), {}, False)
+    ("rf", RandomForestClassifier(), RF_PARAMS),
+    ("lgbm", LGBMClassifier(), LGBM_PARAMS),
+    ("xgb", XGBClassifier(), XGB_PARAMS),
+    ("catboost", CatBoostClassifier(), CBOOST_PARAMS)
 ] 
 
-tfs = SINGLE_TRANSFORMS
-tfs.extend(TRANSFORMS_2)
-tfs.extend(TRANSFORMS_3)
 transform_list = {
     "rf": (["house_ownership", "car_ownership", "married"], []),
     "lgbm": ([], SINGLE_TRANSFORMS),
     "xgb": (["house_ownership", "car_ownership", "married"], SINGLE_TRANSFORMS),
-    "lgbm-v2": ([], TRANSFORMS_2),
-    "xgb-v2": ([], TRANSFORMS_3),
-    "knn": ([], [])
+    "catboost": ([], [])
 }
+
+
 
 import os
 import pandas as pd
@@ -71,28 +67,53 @@ def base_level_predictions(model, drop_cols=[], transforms=[]):
     meta_test = pd.DataFrame.from_dict({"id": np.arange(meta_test.size), "preds": meta_test})
     return (meta_train, meta_test)
 
-def biased_base_level_predictions(model, drop_cols=[], transforms=[]):
-    df_train, df_test = data_preprocess(drop_cols, transforms)
-    df_bias = make_biased_dataset(df_train.copy())
+def catboost_predictions(model, drop_cols=[], transforms=[]):
+    df_train, df_test = data_preprocess(drop_cols, transforms, no_encode=True)
 
-    X = df_bias.drop(["risk_flag", "Id"], axis=1).values
-    y = df_bias["risk_flag"].values
-    model.fit(X, y)
+    cols = df_train.drop(["risk_flag", "Id"], axis=1).columns.to_list()
+    cat_cols = ["house_ownership", "car_ownership", "married", "city", "state", "profession"]
+    cat_cols = [cols.index(col) for col in cat_cols]
 
-    meta_train = {}
-    meta_train["id"] = df_train["Id"].values
-    meta_train["preds"] = model.predict_proba(df_train.drop(["Id", "risk_flag"], axis=1).values)[:,0]
-    meta_train["targets"] = df_train["risk_flag"].values
+    ids, y = df_train["Id"].values, df_train["risk_flag"].values
+    X = df_train.drop(["risk_flag", "Id"], axis=1).values
+    
+    meta_train = {"id": [], "preds": [], "targets": []}
+    for (train_idx, test_idx) in CV.split(X, y):
+        model.fit(X[train_idx], y[train_idx], cat_features=cat_cols)
+        
+        meta_train["preds"].extend(model.predict_proba(X[test_idx])[:,0])
+        meta_train["id"].extend(ids[test_idx])
+        meta_train["targets"].extend(y[test_idx])
+    
+    meta_train = pd.DataFrame.from_dict(meta_train).sort_values(by="id")
 
-    meta_train = pd.DataFrame.from_dict(meta_train)
+    model.fit(X, y, cat_features=cat_cols)
     meta_test = model.predict_proba(df_test.drop("id", axis=1).values)[:,0]
     meta_test = pd.DataFrame.from_dict({"id": np.arange(meta_test.size), "preds": meta_test})
     return (meta_train, meta_test)
+
+# def biased_base_level_predictions(model, drop_cols=[], transforms=[], no_encode=False):
+#     df_train, df_test = data_preprocess(drop_cols, transforms, no_encode)
+#     df_bias = make_biased_dataset(df_train.copy())
+
+#     X = df_bias.drop(["risk_flag", "Id"], axis=1).values
+#     y = df_bias["risk_flag"].values
+#     model.fit(X, y)
+
+#     meta_train = {}
+#     meta_train["id"] = df_train["Id"].values
+#     meta_train["preds"] = model.predict_proba(df_train.drop(["Id", "risk_flag"], axis=1).values)[:,0]
+#     meta_train["targets"] = df_train["risk_flag"].values
+
+#     meta_train = pd.DataFrame.from_dict(meta_train)
+#     meta_test = model.predict_proba(df_test.drop("id", axis=1).values)[:,0]
+#     meta_test = pd.DataFrame.from_dict({"id": np.arange(meta_test.size), "preds": meta_test})
+#     return (meta_train, meta_test)
     
 def generate_meta_datasets(model_list, transform_list):
     X_meta, X_test = [], []
     for i in tqdm(range(len(model_list))):
-        name, model, model_params, use_bias = model_list[i]
+        name, model, model_params = model_list[i]
         model = clone(model)
         model.set_params(**model_params)
 
@@ -103,9 +124,10 @@ def generate_meta_datasets(model_list, transform_list):
             X_test.append(pd.read_csv(meta_test_fname))
         else:
             drop_cols, transforms = transform_list[name]
-            if use_bias:
-                meta_train, meta_test = biased_base_level_predictions(model, drop_cols, transforms)
-            else:
+
+            if "catboost" in name:
+                meta_train, meta_test = catboost_predictions(model, drop_cols, transforms)
+            else:    
                 meta_train, meta_test = base_level_predictions(model, drop_cols, transforms)
 
             meta_train.rename(columns={"preds": f"{name}_preds"}, inplace=True)

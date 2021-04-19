@@ -1,186 +1,129 @@
-from main import data_preprocess, SINGLE_TRANSFORMS
-
-from sklearn import clone
-from sklearn.model_selection import StratifiedKFold
-from sklearn.ensemble import (
-        RandomForestClassifier,
-        GradientBoostingClassifier, 
-        ExtraTreesClassifier
-)
-from sklearn.neural_network import MLPClassifier
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
-
-ORIGNAL_SIZE = 252000
-
-from main import *
-
-"""
-*********************************************************************
-*   IF YOU CHANGE ANY OF THE CONFIGURATIONS FOR AN EXISTING MODEL,  *
-*   DELETE THE SAVE FILES IN "./ensembles_files"                    *
-*********************************************************************
-"""
-from sklearn.neighbors import KNeighborsClassifier
-from catboost import CatBoostClassifier
-model_list = [
-    ("rf", RandomForestClassifier(), RF_PARAMS),
-    ("lgbm", LGBMClassifier(), LGBM_PARAMS),
-    ("xgb", XGBClassifier(), XGB_PARAMS),
-    ("catboost", CatBoostClassifier(), CBOOST_PARAMS)
-] 
-
-transform_list = {
-    "rf": (["house_ownership", "car_ownership", "married"], []),
-    "lgbm": ([], SINGLE_TRANSFORMS),
-    "xgb": (["house_ownership", "car_ownership", "married"], SINGLE_TRANSFORMS),
-    "catboost": ([], [])
-}
-
-
-
 import os
 import pandas as pd
 import numpy as np
-from tqdm import tqdm
+
+from sklearn import clone
+from sklearn.model_selection import StratifiedKFold
 
 CV = StratifiedKFold(n_splits=5, shuffle=True)
+SAVE_DIR = "./ensemble_files"
 
-def base_level_predictions(model, drop_cols=[], transforms=[]):
-    df_train, df_test = data_preprocess(drop_cols, transforms)
+class BaseModelPipeline:
+    def __init__(self, model, preprocess_fn, transform_fn=None):
+        self.model = model
+        self.transform_fn = transform_fn
+        self.preprocess_fn = preprocess_fn
 
-    ids, y = df_train["Id"].values, df_train["risk_flag"].values
-    X = df_train.drop(["risk_flag", "Id"], axis=1).values
-
-    meta_train = {"id": [], "preds": [], "targets": []}
-    for (train_idx, test_idx) in CV.split(X, y):
-        model.fit(X[train_idx], y[train_idx])
+    def get_train_features(self, train_file, target_name):
+        dtrain = self.preprocess_fn(pd.read_csv(train_file))
+        targets = dtrain[target_name].values
         
-        meta_train["preds"].extend(model.predict_proba(X[test_idx])[:,0])
-        meta_train["id"].extend(ids[test_idx])
-        meta_train["targets"].extend(y[test_idx])
-    
-    meta_train = pd.DataFrame.from_dict(meta_train).sort_values(by="id")
+        meta_train = {"id": [], "preds": [], "targets": []}
+        for (train_idx, test_idx) in CV.split(np.zeros_like(targets), targets):
+            self.model = clone(self.model)
+            X_train, X_test = dtrain.iloc[train_idx], dtrain.iloc[test_idx]
 
-    model.fit(X, y)
-    meta_test = model.predict_proba(df_test.drop("id", axis=1).values)[:,0]
-    meta_test = pd.DataFrame.from_dict({"id": np.arange(meta_test.size), "preds": meta_test})
-    return (meta_train, meta_test)
-
-def catboost_predictions(model, drop_cols=[], transforms=[]):
-    df_train, df_test = data_preprocess(drop_cols, transforms, no_encode=True)
-
-    cols = df_train.drop(["risk_flag", "Id"], axis=1).columns.to_list()
-    cat_cols = ["house_ownership", "car_ownership", "married", "city", "state", "profession"]
-    cat_cols = [cols.index(col) for col in cat_cols]
-
-    ids, y = df_train["Id"].values, df_train["risk_flag"].values
-    X = df_train.drop(["risk_flag", "Id"], axis=1).values
-    
-    meta_train = {"id": [], "preds": [], "targets": []}
-    for (train_idx, test_idx) in CV.split(X, y):
-        model.fit(X[train_idx], y[train_idx], cat_features=cat_cols)
+            if self.transform_fn:
+                X_train, y_train = self.transform_fn(X_train, target_name)
+            else:
+                X_train, y_train = X_train.drop(["id", target_name], axis=1), X_train[target_name].values
+            self.model.fit(X_train, y_train)
+            
+            meta_train["id"].extend(X_test["id"].tolist())
+            meta_train["preds"].extend(self.model.predict_proba(X_test.drop(["id", target_name], axis=1))[:,0])
+            meta_train["targets"].extend(X_test[target_name].tolist())
         
-        meta_train["preds"].extend(model.predict_proba(X[test_idx])[:,0])
-        meta_train["id"].extend(ids[test_idx])
-        meta_train["targets"].extend(y[test_idx])
-    
-    meta_train = pd.DataFrame.from_dict(meta_train).sort_values(by="id")
+        meta_train = pd.DataFrame.from_dict(meta_train).sort_values(by="id")
+        return meta_train   
 
-    model.fit(X, y, cat_features=cat_cols)
-    meta_test = model.predict_proba(df_test.drop("id", axis=1).values)[:,0]
-    meta_test = pd.DataFrame.from_dict({"id": np.arange(meta_test.size), "preds": meta_test})
-    return (meta_train, meta_test)
 
-# def biased_base_level_predictions(model, drop_cols=[], transforms=[], no_encode=False):
-#     df_train, df_test = data_preprocess(drop_cols, transforms, no_encode)
-#     df_bias = make_biased_dataset(df_train.copy())
-
-#     X = df_bias.drop(["risk_flag", "Id"], axis=1).values
-#     y = df_bias["risk_flag"].values
-#     model.fit(X, y)
-
-#     meta_train = {}
-#     meta_train["id"] = df_train["Id"].values
-#     meta_train["preds"] = model.predict_proba(df_train.drop(["Id", "risk_flag"], axis=1).values)[:,0]
-#     meta_train["targets"] = df_train["risk_flag"].values
-
-#     meta_train = pd.DataFrame.from_dict(meta_train)
-#     meta_test = model.predict_proba(df_test.drop("id", axis=1).values)[:,0]
-#     meta_test = pd.DataFrame.from_dict({"id": np.arange(meta_test.size), "preds": meta_test})
-#     return (meta_train, meta_test)
-    
-def generate_meta_datasets(model_list, transform_list):
-    X_meta, X_test = [], []
-    for i in tqdm(range(len(model_list))):
-        name, model, model_params = model_list[i]
-        model = clone(model)
-        model.set_params(**model_params)
-
-        meta_train_fname = f"./ensemble_files/{name}_meta_train.csv"
-        meta_test_fname = f"./ensemble_files/{name}_meta_test.csv"
-        if os.path.exists(meta_train_fname) and os.path.exists(meta_test_fname):
-            X_meta.append(pd.read_csv(meta_train_fname))
-            X_test.append(pd.read_csv(meta_test_fname))
+    def get_test_features(self, train_file, test_file, target_name):
+        dtrain, dtest = self.preprocess_fn(pd.read_csv(train_file), pd.read_csv(test_file))
+        
+        if self.transform_fn:
+            X_train, y_train = self.transform_fn(dtrain, target_name)
         else:
-            drop_cols, transforms = transform_list[name]
+            X_train, y_train = dtrain.drop(["id", "risk_flag"], axis=1), dtrain["risk_flag"].values
+        
+        self.model = clone(self.model)
+        self.model.fit(X_train, y_train)
+        preds = self.model.predict_proba(dtest.drop("id", axis=1))[:,0]
 
-            if "catboost" in name:
-                meta_train, meta_test = catboost_predictions(model, drop_cols, transforms)
-            else:    
-                meta_train, meta_test = base_level_predictions(model, drop_cols, transforms)
+        meta_test = pd.DataFrame.from_dict({"id": dtest["id"], "preds": preds})
+        return meta_test
 
-            meta_train.rename(columns={"preds": f"{name}_preds"}, inplace=True)
-            meta_test.rename(columns={"preds": f"{name}_preds"}, inplace=True)
-            meta_train.to_csv(meta_train_fname, index=False)
-            meta_test.to_csv(meta_test_fname, index=False)
+class EnsembleLearner:
+    def __init__(self, meta_learner, save_dir, preprocess_fn=None, transform_fn=None, **base_models):
+        self.base_models = {name: BaseModelPipeline(**model_spec) for name, model_spec in base_models.items()}
+        self.save_dir = save_dir
+        self.preprocess_fn = preprocess_fn
+        self.transform_fn = transform_fn
+        self.meta_learner = meta_learner
 
-            X_meta, X_test = X_meta + [meta_train], X_test + [meta_test]
+    def generate_datasets(self, train_file, test_file, passthrough=False):
+        X_meta, X_test = [], []
+        
+        for name, model in self.base_models.items():
+            meta_train_fname = os.path.join(self.save_dir, f"{name}_meta_train.csv")
+            meta_test_fname = os.path.join(self.save_dir, f"{name}_meta_test.csv")
 
-    df_train, targets = X_meta[0].drop("targets", axis=1), X_meta[0]["targets"].values
-    for df in X_meta[1:-1]:
-        assert not np.any(targets != df["targets"].values)
-        df_train = df_train.merge(df.drop("targets", axis=1), on="id")
-    df_train = df_train.merge(X_meta[-1], on="id")
+            if os.path.exists(meta_train_fname) and os.path.exists(meta_test_fname):
+                X_meta.append(pd.read_csv(meta_train_fname))
+                X_test.append(pd.read_csv(meta_test_fname))
+            else:
+                print(f"Generating meta datasets for model: {name}")
+                meta_train = model.get_train_features(train_file, target_name="risk_flag")
+                meta_test = model.get_test_features(train_file, test_file, target_name="risk_flag")
 
-    df_test = X_test[0]
-    for df in X_test[1:]:
-        df_test = df_test.merge(df, on="id")
-    
-    df_train.to_csv("./ensemble_files/final_train.csv", index=False)
-    df_test.to_csv("./ensemble_files/final_test.csv", index=False)
+                meta_train.rename(columns={"preds": f"{name}_preds"}, inplace=True)
+                meta_train.to_csv(meta_train_fname, index=False)
+                meta_test.rename(columns={"preds": f"{name}_preds"}, inplace=True)
+                meta_test.to_csv(meta_test_fname, index=False)
 
-    return df_train, df_test
+                X_meta, X_test = X_meta + [meta_train], X_test + [meta_test]
+        
+        meta_train, labels = X_meta[0].drop("targets", axis=1), X_meta[0]["targets"].values
+        for df in X_meta[1:-1]:
+            assert not np.any(labels != df["targets"].values)
+            meta_train = meta_train.merge(df.drop("targets", axis=1), on="id")
+        meta_train = meta_train.merge(X_meta[-1], on="id")
 
-def make_ensemble_submission(model):
-    df_train, df_test = pd.read_csv("./ensemble_files/final_train.csv"), pd.read_csv("./ensemble_files/final_test.csv")
-    
-    X, y = df_train.drop(["targets", "id"], axis=1).values, df_train["targets"]
-    model.fit(X, y)
+        meta_test = X_test[0]
+        for df in X_test[1:]:
+            meta_test = meta_test.merge(df, on="id")
 
-    preds = model.predict(df_test.drop("id", axis=1).values)
-    
-    sub = pd.DataFrame.from_dict({"id": df_test["id"], "risk_flag": preds})
-    sub.to_csv("./ensemble_files/stacking_sub.csv", index=False)
+        if passthrough:
+            if not self.preprocess_fn:
+                raise ValueError("if using `passthrough` both `preprocess_fn` and `transform_fn` for the meta learner need to be specified")
+            
+            dtrain, dtest = self.preprocess_fn(pd.read_csv(train_file), pd.read_csv(test_file), target_name="risk_flag")
 
-def max_voting_submission(df_test):
-    preds = df_test.drop("id", axis=1).mean(axis=1)
-    preds = preds.apply(lambda x: int(not x > 0.5))
-    sub = pd.DataFrame.from_dict({"id": df_test["id"], "risk_flag": preds})
-    sub.to_csv("./ensemble_files/maxvoting_sub.csv", index=False)
+            meta_train = meta_train.merge(dtrain.drop("risk_flag", axis=1), on="id")
+            meta_test = meta_test.merge(dtest, on="id")
+
+        meta_train.to_csv(os.path.join(self.save_dir, "ensemble_train.csv"), index=False)
+        meta_test.to_csv(os.path.join(self.save_dir, "ensemble_test.csv"), index=False)
+
+        return meta_train, meta_test
+
+    def predictions(self, train_file, test_file, passthrough=False):
+        meta_train, meta_test = self.generate_datasets(train_file, test_file, passthrough)
+
+        if self.transform_fn:
+            X_train, y_train = self.transform_fn(meta_train)
+        else:
+            X_train, y_train = meta_train.drop(["id", "targets"], axis=1), meta_train["targets"].values
+        
+        self.meta_learner.fit(X_train, y_train)
+        preds = self.meta_learner.predict(meta_test.drop("id", axis=1))
+
+        sub = pd.DataFrame.from_dict({"id": meta_test["id"], "risk_flag": preds})
+        sub.to_csv(os.path.join(self.save_dir, "stacking_sub.csv"), index=False)
 
 if __name__ == "__main__":
-    df_train, df_test = generate_meta_datasets(model_list, transform_list)
-    # model = XGBClassifier(gamma=0.5, tree_method="gpu_hist", n_estimators=5000, learning_rate=0.01, subsample=0.6)
-    # # RandomForestClassifier(n_estimators=1000, n_jobs=-1, class_weight="balanced")
-    # make_submission(model)
-
-    from sklearn.svm import LinearSVC
-    
-    make_ensemble_submission(RandomForestClassifier(n_jobs=-1, class_weight="balanced", max_depth=5, max_features=1))
-    # model = LGBMClassifier(colsample_bytree=0.8565, max_depth=25, max_bin=180, num_leaves=188, scale_pos_weight=12.21, subsample=0.44, boosting_type="goss", device="gpu", n_estimators=2000)
-    # make_ensemble_submission(model)
-    # max_voting_submission(df_test)
+    from models import base_models, meta_learner
+    ensemble_learner = EnsembleLearner(meta_learner["model"], SAVE_DIR, meta_learner["preprocess_fn"], meta_learner["transform_fn"], **base_models)
+    ensemble_learner.predictions(train_file="./train.csv", test_file="./test.csv", passthrough=False)
 
     from main import compare_submissions
-    print(compare_submissions("./goodsubmits/stacking_sub2.csv", "./ensemble_files/stacking_sub.csv"))
+    print(compare_submissions("./BEST.csv","./ensemble_files/stacking_sub.csv"))

@@ -33,8 +33,6 @@ CV = StratifiedKFold(n_splits=N_FOLDS, shuffle=True)
 SINGLE_TRANSFORMS = [
     (scale_by_col, {"cols": ["current_job_years"], "scale_cols": ["current_house_years"]}),
     (scale_by_group, {"cols": ["income", "income"], "groups": ["city", "profession"]}),
-    (add_house_status, {}),
-    (custom_transform1, {})
 ]
 
 TRANSFORMS_2 = [
@@ -49,7 +47,7 @@ TRANSFORMS_3 = [
 
 def data_preprocess(drop_cols=[], transforms=[], no_encode=False):
     df_train, df_test = (
-            pd.read_csv(TRAIN_FILE), 
+            pd.read_csv(TRAIN_FILE).rename(columns={"Id": "id"}), 
             pd.read_csv(TEST_FILE)
         )
     
@@ -101,7 +99,7 @@ def plot_rf_feats_imp(model, df_train):
 
 def compare_submissions(true, preds):
     true, preds = pd.read_csv(true), pd.read_csv(preds)
-    print(roc_auc_score(true["risk_flag"].values, preds["risk_flag"].values))
+    return roc_auc_score(true["risk_flag"].values, preds["risk_flag"].values)
 
 RF_PARAMS = {
     "n_estimators": 1000,
@@ -151,8 +149,9 @@ CBOOST_PARAMS = {
 
 if __name__ == "__main__":
     df_train, df_test = data_preprocess(
-        drop_cols=["house_ownership", "car_ownership", "married"],
-        transforms=SINGLE_TRANSFORMS
+        drop_cols=[],
+        transforms=[],
+        no_encode=True
     )
 
     
@@ -161,12 +160,24 @@ if __name__ == "__main__":
     # model = LGBMClassifier(is_unbalance=True, n_estimators=200, learning_rate=0.1, device="gpu", num_leaves=200, boosting_type="goss", subsample=0.6)
     # print(eval_model(model, df_train))
 
+    from catboost import CatBoostClassifier, Pool
+    dtrain = Pool(
+        data=df_train.drop(["Id", "risk_flag"], axis=1),
+        label=df_train["risk_flag"].values,
+        cat_features=["house_ownership", "city", "state", "married", "car_ownership", "profession"]
+    )
+    model = CatBoostClassifier(**CBOOST_PARAMS)
+    model.fit(dtrain)
+    
+    preds = model.predict(df_test.drop("id", axis=1))
+    res = pd.DataFrame.from_dict({"id": np.arange(preds.size), "risk_flag": list(preds)})
+    res.to_csv("./catboost_sub.csv", index=False)
 
     # make_submission(
-    #         model,
+    #         CatBoostClassifier(**CBOOST_PARAMS),
     #         df_train,
     #         df_test,
-    #         "./tuning_rf/sub5.csv"
+    #         "./catboost_sub.csv"
     #     )
 
-    # print(compare_submissions("./goodsubmits/submission.csv", "./tuning_rf/sub5.csv"))
+    print(compare_submissions("./goodsubmits/stacking_sub2.csv", "catboost_sub.csv"))
